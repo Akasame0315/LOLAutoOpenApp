@@ -1,6 +1,9 @@
 import os, sys, json, subprocess, time, requests
 from requests.auth import HTTPBasicAuth
+import tkinter as tk 
 from tkinter import Tk, filedialog, messagebox
+import threading
+import time
 
 # Get path where exe is located
 BASE_DIR = os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else os.path.abspath(__file__))
@@ -13,6 +16,84 @@ COMMON_RIOT_PATHS = [
 COMMON_LOCKFILE_DIRS = [
     os.path.expandvars(r"%LOCALAPPDATA%\Riot Games\Riot Client\Config")
 ]
+
+# Check Riot Client Version
+def wait_for_update(session, base_url):
+    print("Checking for Riot Client update...")
+    while True:
+        try:
+            r = session.get(f"{base_url}/product-launcher/v1/products/league_of_legends/patchlines/live")
+            if r.status_code == 200:
+                data = r.json()
+                state = data.get("state", "").lower()
+                if state == "live":
+                    print("Riot Client is up-to-date.")
+                    break
+                elif state == "updating":
+                    print("Riot Client is updating... please wait.")
+                else:
+                    print(f"Current patchline state: {state}")
+            else:
+                print(f"Failed to get patchline status: {r.status_code}")
+        except requests.exceptions.RequestException:
+            pass
+        time.sleep(3)  # Check every 3 seconds
+
+# Choose game to start with Riot Client
+def choose_game():
+    games = {
+        "League of Legends": ("league_of_legends", "live"),
+        "Valorant": ("valorant", "live"),
+        "Teamfight Tactics": ("bacon", "live"),
+        "Legends of Runeterra": ("lor", "live")
+    }
+    selected = {}
+    root = tk.Tk()
+    root.title("Riot Game Launcher")
+    root.geometry("400x300")
+
+    status_text = tk.StringVar(value="Select a game to launch:")
+    
+    def update_status(message):
+        status_text.set(message)
+        root.update_idletasks()
+
+    def select_game(game_id, patchline):
+        selected["id"] = game_id
+        selected["patchline"] = patchline
+        # Replace UI with status log
+        for widget in root.winfo_children():
+            widget.destroy()
+        tk.Label(root, textvariable=status_text, font=("Arial", 12), wraplength=350).pack(pady=20)
+        # Run launch in background so UI doesn't freeze
+        threading.Thread(target=launch_game_process, args=(update_status,)).start()
+
+    def launch_game_process(update_status_func):
+        update_status_func(f"Starting Riot Client for {selected['id']}...")
+        time.sleep(2)  # Simulate steps
+        update_status_func("Waiting for lockfile...")
+        time.sleep(2)
+        update_status_func("Checking for updates...")
+        time.sleep(2)
+        update_status_func(f"Launching {selected['id']}...")
+        time.sleep(1)
+        update_status_func(f"{selected['id']} launched successfully!")
+        time.sleep(3)
+        root.destroy()
+
+    tk.Label(root, text="Select a game:", font=("Arial", 14)).pack(pady=10)
+    for name, (gid, pl) in games.items():
+        tk.Button(
+            root,
+            text=name,
+            font=("Arial", 12),
+            command=lambda g=gid, p=pl: select_game(g, p)
+        ).pack(pady=5, fill="x", padx=20)
+
+    root.mainloop()
+    if "id" in selected:
+        return selected["id"], selected["patchline"]
+    return None, None
 
 def auto_find_file(paths):
     for p in paths:
@@ -73,12 +154,19 @@ def main():
 
     config = load_or_create_config()
     riot_client_path = config["riotClientPath"]
-    lockfile_path = os.path.join(config["lockfileDir"], "lockfile")
+    lockfile_path = os.path.join(config["lockfileDir"], "lockfile")    
 
+    product_id, patchline = choose_game()
+    if not product_id:
+        print("No game selected. Exiting...")
+        return
+    
     args = [
         riot_client_path,
-        "--launch-product=league_of_legends",
-        "--launch-patchline=live"
+        f"--launch-product={product_id}",
+        f"--launch-patchline={patchline}"
+        # "--launch-product=league_of_legends",
+        # "--launch-patchline=live"
     ]
 
     if not os.path.exists(riot_client_path):
@@ -110,14 +198,16 @@ def main():
             pass
         time.sleep(1)
 
-    print("Launching League of Legends...")
-    launch_url = f"{base_url}/product-launcher/v1/products/league_of_legends/patchlines/live"
+    wait_for_update(session, base_url)
+
+    print(f"Launching {product_id}...")
+    launch_url = f"{base_url}/product-launcher/v1/products/{product_id}/patchlines/{patchline}"
     r = session.post(launch_url)
 
     if r.status_code == 200:
-        print("League of Legends launched successfully!")
+        print(f"{product_id} launched successfully!")
     else:
-        print(f"Failed to launch LoL: {r.status_code} - {r.text}")
+        print(f"Failed to launch {product_id}: {r.status_code} - {r.text}")
 
 if __name__ == "__main__":
     main()
